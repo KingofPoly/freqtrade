@@ -20,7 +20,7 @@
       
       
       <link rel="icon" href="../images/logo.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.16">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.19">
     
     
       
@@ -1808,6 +1808,7 @@ This is done by not looking at the strategy code itself, but at changed indicato
 <li><code>--dry-run-wallet</code> is forced to be basically infinite (1 billion).</li>
 <li><code>--stake-amount</code> is forced to be a static 10000 (10k).</li>
 <li><code>--enable-protections</code> is forced to be off.</li>
+<li><code>order_types</code> are forced to be "market" (late entries) unless <code>--lookahead-allow-limit-orders</code> is set.</li>
 </ul>
 <p>These are set to avoid users accidentally generating false positives.</p>
 <h2 id="lookahead-analysis-command-reference">Lookahead-analysis command reference<a class="headerlink" href="#lookahead-analysis-command-reference" title="Permanent link">&para;</a></h2>
@@ -1827,11 +1828,13 @@ This is done by not looking at the strategy code itself, but at changed indicato
                                     [--timeframe-detail TIMEFRAME_DETAIL]
                                     [--strategy-list STRATEGY_LIST [STRATEGY_LIST ...]]
                                     [--export {none,trades,signals}]
-                                    [--export-filename PATH]
+                                    [--backtest-filename PATH]
+                                    [--backtest-directory PATH]
                                     [--freqai-backtest-live-models]
                                     [--minimum-trade-amount INT]
                                     [--targeted-trade-amount INT]
                                     [--lookahead-analysis-exportfilename LOOKAHEAD_ANALYSIS_EXPORTFILENAME]
+                                    [--allow-limit-orders]
 
 options:
   -h, --help            show this help message and exit
@@ -1872,10 +1875,15 @@ options:
                         becomes `backtest-data-SampleStrategy.json`
   --export {none,trades,signals}
                         Export backtest results (default: trades).
-  --export-filename PATH, --backtest-filename PATH
-                        Use this filename for backtest results.Requires
-                        `--export` to be set as well. Example: `--export-filen
-                        ame=user_data/backtest_results/backtest_today.json`
+  --backtest-filename PATH, --export-filename PATH
+                        Use this filename for backtest results.Example:
+                        `--backtest-
+                        filename=backtest_results_2020-09-27_16-20-48.json`.
+                        Assumes either `user_data/backtest_results/` or
+                        `--export-directory` as base directory.
+  --backtest-directory PATH, --export-directory PATH
+                        Directory to use for backtest results. Example:
+                        `--export-directory=user_data/backtest_results/`.
   --freqai-backtest-live-models
                         Run backtest with ready models.
   --minimum-trade-amount INT
@@ -1885,6 +1893,8 @@ options:
   --lookahead-analysis-exportfilename LOOKAHEAD_ANALYSIS_EXPORTFILENAME
                         Use this csv-filename to store lookahead-analysis-
                         results
+  --allow-limit-orders  Allow limit orders in lookahead analysis (could cause
+                        false positives in lookahead analysis results).
 
 Common arguments:
   -v, --verbose         Verbose mode (-vv for more, -vvv to get all messages).
@@ -1927,7 +1937,7 @@ Strategy arguments:
 <p>Many strategies, without the programmer knowing, have fallen prey to lookahead bias.
 This typically makes the strategy backtest look profitable, sometimes to extremes,  but this is not realistic as the strategy is "cheating" by looking at data it would not have in dry or live modes.</p>
 <p>The reason why strategies can "cheat" is because the freqtrade backtesting process populates the full dataframe including all candle timestamps at the outset.
-If the programmer is not careful or oblivious how things work internally 
+If the programmer is not careful or oblivious how things work internally
 (which sometimes can be really hard to find out) then the strategy will look into the future.</p>
 <p>This command is made to try to verify the validity in the form of the aforementioned lookahead bias.</p>
 <h3 id="how-does-the-command-work">How does the command work?<a class="headerlink" href="#how-does-the-command-work" title="Permanent link">&para;</a></h3>
@@ -1935,8 +1945,7 @@ If the programmer is not careful or oblivious how things work internally
 After this initial backtest runs, it will look if the <code>minimum-trade-amount</code> is met and if not cancel the lookahead-analysis for this strategy.<br />
 If this happens, use a wider timerange to get more trades for the analysis, or use a timerange where more trades occur.</p>
 <p>After setting the baseline it will then do additional backtest runs for every entry and exit separately.<br />
-When these verification backtests complete, it will compare the indicators at the signal candles (both entry or exit)
-and report the bias.<br />
+When these verification backtests complete, it will compare both dataframes (baseline and sliced) for any difference in columns' value and report the bias.
 After all signals have been verified or falsified a result table will be generated for the user to see.</p>
 <h3 id="how-to-find-and-remove-bias-how-can-i-salvage-a-biased-strategy">How to find and remove bias? How can I salvage a biased strategy?<a class="headerlink" href="#how-to-find-and-remove-bias-how-can-i-salvage-a-biased-strategy" title="Permanent link">&para;</a></h3>
 <p>If you found a biased strategy online and want to have the same results, just without bias,
@@ -1978,9 +1987,12 @@ If the strategy has many different signals / signal types, it's up to you to sel
 This would lead to a false-negative, i.e. the strategy will be reported as non-biased.</li>
 <li><code>lookahead-analysis</code> has access to the same backtesting options and this can introduce problems.
 Please don't use any options like enabling position stacking as this will distort the number of checked signals.
-If you decide to do so, then make doubly sure that you won't ever run out of <code>max_open_trades</code> slots, 
+If you decide to do so, then make doubly sure that you won't ever run out of <code>max_open_trades</code> slots,
 and that you have enough capital in the backtest wallet configuration.</li>
-<li>In the results table, the <code>biased_indicators</code> column 
+<li>limit orders in combination with <code>custom_entry_price()</code> and <code>custom_exit_price()</code> callbacks can cause late / delayed entries and exists, causing false positives.
+To avoid this - market orders are forced for this command. This implicitly means that <code>custom_entry_price()</code> and <code>custom_exit_price()</code> callbacks are not called.
+Using <code>--lookahead-allow-limit-orders</code> will skip the override and use your configured order types - however has shown to eventually produce false positives.</li>
+<li>In the results table, the <code>biased_indicators</code> column
 will falsely flag FreqAI target indicators defined in <code>set_freqai_targets()</code> as biased.<br />
 <strong>These are not biased and can safely be ignored.</strong></li>
 </ul>
@@ -2087,10 +2099,10 @@ will falsely flag FreqAI target indicators defined in <code>set_freqai_targets()
     
     
       
-      <script id="__config" type="application/json">{"base": "..", "features": ["content.code.annotate", "search.share", "content.code.copy", "content.action.edit", "navigation.top", "navigation.footer"], "search": "../assets/javascripts/workers/search.d50fe291.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"alias": true, "provider": "mike"}}</script>
+      <script id="__config" type="application/json">{"base": "..", "features": ["content.code.annotate", "search.share", "content.code.copy", "content.action.edit", "navigation.top", "navigation.footer"], "search": "../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"alias": true, "provider": "mike"}}</script>
     
     
-      <script src="../assets/javascripts/bundle.50899def.min.js"></script>
+      <script src="../assets/javascripts/bundle.92b07e13.min.js"></script>
       
         <script src="../javascripts/config.js"></script>
       
